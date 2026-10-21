@@ -5,3 +5,4 @@ pynput
 customtkinter
 pydirectinput; sys_platform == 'win32'
 requests
+Pillow

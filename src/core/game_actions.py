@@ -132,9 +132,11 @@ def sell_crops(logger=print):
 # MOVEMENT
 # =============================================================================
 
+
 def move(direction, steps=1, logger=print):
     """
     Move in a given direction for a number of steps.
+    Check inventory before moving to avoid skipping crops.
     
     Args:
         direction: 'w', 'a', 's', or 'd'
@@ -148,39 +150,67 @@ def move(direction, steps=1, logger=print):
         'a': ('col', -1),
         'd': ('col', 1),
     }
-    
+
     for _ in range(steps):
         if not state.bot_running:
             return
-        
+
+        # Catch delayed inventory-full warnings before moving
+        if automation.check_inventory_full():
+            logger(
+                "Inventory full before movement. Selling...",
+                "warning"
+            )
+            sell_crops(logger)
+
+            if not state.bot_running:
+                return
+
+            # Retry harvesting the current tile
+            automation.press_key(Key.space)
+            time.sleep(Config.HARVEST_DELAY)
+
         automation.press_key(direction)
         state.stats['total_moves'] += 1
-        
+
         # Update position
         if direction in DIRECTION_DELTA:
             axis, delta = DIRECTION_DELTA[direction]
             state.current_position[axis] += delta
-        
+
         time.sleep(Config.MOVE_DELAY)
-        
-        if automation.check_inventory_full():
-            sell_crops(logger)
+
 
 
 def harvest(logger=print):
-    """Harvest the current plot."""
+    """Harvest the current plot and retry failed harvests."""
+
     for _ in range(Config.HARVEST_COUNT):
         if not state.bot_running:
             return
-        
-        if automation.check_inventory_full():
-            sell_crops(logger)
-            automation.press_key(Key.space)
 
+        # Attempt to harvest
         automation.press_key(Key.space)
         time.sleep(Config.HARVEST_DELAY)
-    
+
+        # Check whether inventory became full
+        if automation.check_inventory_full():
+            logger(
+                "Inventory full! Selling and retrying harvest...",
+                "warning"
+            )
+
+            sell_crops(logger)
+
+            if not state.bot_running:
+                return
+
+            # Retry the failed harvest on the same tile
+            automation.press_key(Key.space)
+            time.sleep(Config.HARVEST_DELAY)
+
     state.stats['total_harvests'] += 1
+
 
 
 def return_to_start(logger=print):

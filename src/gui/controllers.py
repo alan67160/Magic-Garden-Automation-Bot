@@ -30,6 +30,8 @@ class BotController:
         """
         self.gui = gui_ref
         self.current_mode = 'farm'
+        self.worker_thread = None
+        self.stop_event = threading.Event()
     
     def start_farming(self):
         """Start the bot in Farming Mode (Harvesting)."""
@@ -70,42 +72,66 @@ class BotController:
         )
         self.start_bot(mode='shop')
     
+    
     def start_bot(self, mode='farm'):
         """
         Start the automation loop in a separate thread.
+        Only start if no existing worker is alive.
         
         Args:
             mode: 'farm' for harvesting loop, 'shop' for dedicated shop loop
         """
+
+        if self.worker_thread is not None and self.worker_thread.is_alive():
+            self.gui.log(
+                "Cannot start: previous automation thread is still running.",
+                "warning"
+            )
+            return
+
         if state.bot_running:
             return
-        
+
         self.current_mode = mode
+        self.stop_event.clear()
         state.bot_running = True
         state.stats['start_time'] = time.time()
+
         self.gui.update_button_states()
-        
-        # Start automation in a background thread
-        thread = threading.Thread(target=self._run_automation, daemon=True)
-        thread.start()
-        
+
+        self.worker_thread = threading.Thread(
+            target=self._run_automation,
+            name="MagicGardenWorker",
+            daemon=True
+        )
+
+        self.worker_thread.start()
+
         self.gui.status_label.set_status("RUNNING")
-        self.gui.log("Automation started.", "success")
+        self.gui.log(
+            f"Automation started (thread ID: {self.worker_thread.ident}).",
+            "success"
+        )
+    
     
     def stop_bot(self):
-        """Stop the automation loop."""
+        """Request automation shutdown."""
+
         if not state.bot_running:
             return
-        
+
         state.bot_running = False
+        self.stop_event.set()
+
         self.gui.update_button_states()
-        
         self.gui.status_label.set_status("STOPPING...")
         self.gui.log("Stopping automation...", "warning")
+
     
     def _run_automation(self):
         """Main bot loop executed in a separate thread."""
-        time.sleep(3)  # Grace period for user to switch to game window
+        if self.stop_event.wait(3):
+            return
         
         if self.current_mode == 'shop':
             # Dedicated shop-only loop
@@ -116,7 +142,7 @@ class BotController:
         # Farm mode - original harvest loop behavior
         self.gui.log("Starting Farming loop...", "success")
         
-        while state.bot_running:
+        while state.bot_running and not self.stop_event.is_set():
             try:
                 state.stats['cycles'] += 1
                 if state.bot_running:
@@ -141,7 +167,8 @@ class BotController:
                             f"Waiting {config.Config.LOOP_COOLDOWN}s before next cycle...", 
                             "info"
                         )
-                    time.sleep(config.Config.LOOP_COOLDOWN)
+                    if self.stop_event.wait(config.Config.LOOP_COOLDOWN):
+                        break
                     
             except Exception as e:
                 self.gui.log(f"An unexpected error occurred in bot thread: {e}", "error")
